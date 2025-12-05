@@ -5,10 +5,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 #%%
+#Parameters
 GROUP_ID = "04"
-ALG = "QLearning"
+ALG = "SARSA"
 TRACK_NAME = "tracks/2-track.txt"
-CRASH_POS = "NRST"
+CRASH_POS = "STRT"
 #%%
 def bresenhamsAlgorithm(x1, x2, y1, y2):
     dx = math.fabs(x1 -x2)
@@ -64,7 +65,7 @@ class RaceTrack:
             self.size = [0,0]
             self.size[0] = int(dims.split(",")[1].strip("\n"))
             self.size[1] = int(dims.split(",")[0])
-            self.array = [[x for y in range(self.size[1])] for x in range(self.size[0])]
+            self.array = [[None for y in range(self.size[1])] for x in range(self.size[0])]
             self.startStates = []
             self.finishStates = []
             self.walls = []
@@ -192,50 +193,62 @@ class Car:
         #print("xPos:", self.xPos, "yPos:", self.yPos, "\nxVel:", self.xVel, "yVel:", self.yVel, "\nxAccel:", self.xAccel, "yAccel:", self.yAccel)
 
 #%%
-def qLearning(learningRate, discountFactor, epochs, explorationDecay, racetrack, min):
+import time
+
+
+def qLearningAndSarsa(learningRate, discountFactor, epochs, explorationDecay, racetrack, min, isSarsa):
     car = Car(racetrack)
-    possibleStates = racetrack.startStates + racetrack.track + racetrack.finishStates
+    possibleLoc = racetrack.startStates + racetrack.track + racetrack.finishStates
+    possibleStates = []
+    startTime = time.time()
+    for place in possibleLoc:
+        for xVel in range(-5,6):
+            for yVel in range(-5,6):
+                state = (place[0], place[1], xVel, yVel)
+                possibleStates.append(state)
     possibleActions = []
-    startState = car.startState
     for xA in [-1,0,1]:
         for yA in [-1,0,1]:
             possibleActions.append((xA, yA))
-    qTable = np.zeros((len(possibleStates), len(possibleActions)))
+    qTable = [[random.random() for _ in possibleActions] for _ in possibleStates]
+    state_to_index = {tuple(state): i for i, state in enumerate(possibleStates)}
+    for state in range(len(possibleStates)):
+        s = possibleStates[state]
+        if((s[0],s[1]) in racetrack.finishStates):
+            qTable[state] = [0 for _ in possibleActions]
     counterArr = []
     epochArr = []
     explorationProb = 1
-    name = "qLearning_L=" + str(learningRate) + "_D="+ str(discountFactor) + "_E=" + str(explorationProb) + "_epochs=" + str(epochs) + ".png"
-    bestVal = car.startState[0] + car.startState[1]
-    print(bestVal)
     for epoch in range(epochs):
         print(epoch)
         if(explorationProb >= min):
             explorationProb *= explorationDecay
-        if(learningRate >= min):
-            learningRate *= 0.999
         car.resetCar()
-        currentState = possibleStates.index(startState)
+        startState = (car.xPos, car.yPos, car.xVel, car.yVel)
+        currentState = state_to_index[startState]
         counter = 0
         while True:
             counter += 1
-            if(random.uniform(0,1) < explorationProb):
+            if(random.random() < explorationProb):
                 actionChosenIndex = random.randint(0, len(possibleActions)-1)
             else:
                 actionChosenIndex = np.argmax(qTable[currentState])
             actionChosen = possibleActions[actionChosenIndex]
             car.updatePos(actionChosen[0],actionChosen[1], False)
-            carState = (car.xPos, car.yPos)
-            if(car.xPos + car.yPos > bestVal):
-                print("Best x and y:", car.xPos, car.yPos)
-                bestVal = car.xPos + car.yPos
-            nextState = possibleStates.index(carState)
-            if(carState in racetrack.finishStates):
-                reward = 0
+            carState = (car.xPos, car.yPos, car.xVel, car.yVel)
+            nextState = state_to_index[carState]
+            reward = -1
+            if(isSarsa):
+                if random.random() < explorationProb:
+                    nextActionIndex = random.randint(0, len(possibleActions)-1)
+                else:
+                    nextActionIndex = np.argmax(qTable[nextState])
+                    # SARSA update: Q(s,a) += α [ r + γ Q(s',a') − Q(s,a) ]
+                qTable[currentState][actionChosenIndex] += learningRate * (reward + discountFactor * qTable[nextState][nextActionIndex] - qTable[currentState][actionChosenIndex])
             else:
-                reward = -1
-            qTable[currentState][actionChosenIndex] += learningRate * (reward + discountFactor * np.max(qTable[nextState]) - qTable[currentState][actionChosenIndex])
+                qTable[currentState][actionChosenIndex] += learningRate * (reward + discountFactor * np.max(qTable[nextState]) - qTable[currentState][actionChosenIndex])
             currentState = nextState
-            if(carState in racetrack.finishStates):
+            if((car.xPos, car.yPos) in racetrack.finishStates):
                 break
         #print("In", counter, "steps")
         counterArr.append(counter)
@@ -251,20 +264,23 @@ def qLearning(learningRate, discountFactor, epochs, explorationDecay, racetrack,
     car.resetCar()
     x_coord = [c.xPos]
     y_coord = [c.yPos]
-    currentState = possibleStates.index(startState)
+    startState = (car.xPos, car.yPos, car.xVel, car.yVel)
+    currentState = state_to_index[startState]
     timeRace = 0
     while True:
+        if(timeRace > 200):
+            return qLearningAndSarsa(learningRate, discountFactor, epochs, explorationDecay, racetrack, min, isSarsa)
         timeRace += 1
         actionChosenIndex = np.argmax(qTable[currentState])
         actionChosen = possibleActions[actionChosenIndex]
         car.updatePos(actionChosen[0],actionChosen[1], False)
         x_coord.append(car.xPos)
         y_coord.append(car.yPos)
-        carState = (car.xPos, car.yPos)
-        nextState = possibleStates.index(carState)
+        carState = (car.xPos, car.yPos, car.xVel, car.yVel)
+        nextState = state_to_index[carState]
         currentState = nextState
-        if(carState in racetrack.finishStates):
-            break
+        if((car.xPos, car.yPos) in racetrack.finishStates):
+                break
 
     #graph = makePlot(r)
     #graph.plot(x_coord,y_coord,linestyle = '-', color = 'blue')
@@ -283,10 +299,6 @@ def qLearning(learningRate, discountFactor, epochs, explorationDecay, racetrack,
 #qTable = qLearning(0.5,0.99, 5000, 0.8, r)
 
 #%%
-import copy
-import random
-import numpy as np
-
 # deterministic transition function (no randomness)
 def transition(oldY, oldX, oldVY, oldVX, accel, racetrack):
     """
@@ -503,6 +515,7 @@ def valueIteration(racetrack, error, discount):
 
 #%%
 r = RaceTrack(TRACK_NAME)
+r2 = RaceTrack(TRACK_NAME)
 c = Car(r)
 x_coord = [c.xPos]
 y_coord = [c.yPos]
@@ -524,14 +537,17 @@ if ALG == "ValItr":
         if(carState in r.finishStates):
             break
 
-elif ALG == "QLrng":
+else:
+    sarsa = False
+    if ALG == "SARSA":
+        sarsa = True
     avg = 0
     bestTime = None
     worstTime = None
     for i in range(5):
-        t, xCord, yCord = qLearning(0.1, .999999, 2500, 1.2, r, 0.05)
-        print(t)
+        t, xCord, yCord = qLearningAndSarsa(0.5, .99, 10000, 0.5, r, 0.2, sarsa)
         avg+= t
+        print(t)
         if((bestTime == None) or t < bestTime):
                         bestTime = t
                         x_coord = xCord
@@ -540,9 +556,7 @@ elif ALG == "QLrng":
                         worstTime = t
                         x_coord2 = xCord
                         y_coord2 = yCord
-    graph = makePlot(r)
-    graph.plot(x_coord,y_coord,linestyle = '-', color = 'blue')
-    graph.show()
+
 
     avg/= 5
     graph = makePlot(r)
@@ -551,9 +565,6 @@ elif ALG == "QLrng":
     print(bestTime)
     print(worstTime)
     print(avg)
-elif ALG == "SARSA":
-    return None
-
 #%%
 graph2 = makePlot(r)
 graph2.plot(x_coord2,y_coord2,linestyle = '-', color = 'blue')
